@@ -15,6 +15,7 @@ on:
       - 'go.mod'
       - 'go.sum'
       - 'Dockerfile'
+  workflow_dispatch:
 
 jobs:
   lint:
