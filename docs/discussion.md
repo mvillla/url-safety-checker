@@ -293,9 +293,9 @@ compiled binary) is uploaded to S3 as part of the CI/CD pipeline. That is
 the only S3 involvement here.
 
 ```text
-URL list updated → uploaded to S3
-  → EventBridge fires Lambda every 10 min
-  → Lambda reads from S3
+URL batch available (source outside scope of this question)
+EventBridge schedule (every 10 min) → fires Lambda
+  → Lambda receives URL batch
   → normalizes URLs
   → writes to ElastiCache Redis
 ```
@@ -311,42 +311,25 @@ queried causes missed detections.
 **Strategy 2: Kubernetes CronJob (on EKS)**
 
 If the service runs on Kubernetes, a `CronJob` resource replaces the Lambda.
-It schedules a container every 10 minutes inside the cluster, so it reaches
-ElastiCache on the private subnet the same way the app pods do.
+It runs a container every 10 minutes inside the cluster that normalizes the
+URL batch and writes to Redis using `SET <url> 1` for additions and
+`DEL <url>` for removals. The implementation can be a shell script with
+`redis-cli` or a small Go binary using `go-redis/v9`; either way the image
+is built and pushed to ECR (or Docker Hub) separately from the main service.
 
-The container runs a small sync script or binary that:
-1. Receives the URL batch (source is outside the scope of this question)
-2. Normalizes each URL
-3. Connects to Redis via `REDIS_ADDR` and writes: `SET <url> 1` for additions,
-   `DEL <url>` for removals
-
-The simplest implementation is a shell script using `redis-cli`:
-
-```bash
-#!/bin/bash
-# URLs piped in or read from a file passed at runtime
-while IFS= read -r url; do
-    redis-cli -h "$REDIS_HOST" SET "$url" 1
-done
-```
-
-Or a small Go binary using `go-redis/v9`, the same client used by `RedisStore`
-in the main app. Either way, the container image is built separately from the
-main service and pushed to ECR alongside it.
+The pod reaches ElastiCache via Security Group rules, the same way the app
+pods do.
 
 **Strategy 3: Admin endpoint (for urgent cases)**
 
 Both strategies above run on a schedule. If a URL needs to be blocked
 immediately, waiting for the next cycle is not acceptable.
 
-A `POST /admin/urls` endpoint built into the app itself handles this. When
-called, the handler writes directly to the same `RedisStore` the app already
-holds. No separate script, no deployment. It takes effect on the next request.
-
-This works regardless of where the service runs: EC2, EKS, or anywhere else.
-The endpoint is part of the app; as long as the app is connected to Redis,
-the update goes through. It should be protected by an API key and only
-accessible from within the private network.
+A `POST /admin/urls` endpoint built into the app handles this: the handler
+writes directly to the `RedisStore` the app already holds since startup, so
+the change takes effect on the next request with no restart or separate
+tooling needed. It should be protected by an API key and only reachable from
+within the private network.
 
 ---
 
