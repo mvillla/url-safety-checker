@@ -47,14 +47,15 @@ storage. `main` wires the components together.
 
 ## 4. Request Flow
 
-```text
-GET /urlinfo/1/example.com/path?x=1
-  -> HTTP handler
-  -> URL normalizer
-  -> lookup service
-  -> URL store
-  -> JSON response
-```
+![URL Safety Checker request flow](assets/url-lookup-flow.svg)
+
+Flow:
+
+1. The proxy sends a blocking lookup request before allowing traffic.
+2. The API layer validates the HTTP method and route shape.
+3. The lookup key builder creates a scheme-less normalized key.
+4. The verdict engine checks that key against the loaded malware URL set.
+5. The service returns a JSON verdict the proxy can use to allow or block.
 
 ## 5. API Contract
 
