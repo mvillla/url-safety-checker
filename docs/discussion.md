@@ -551,128 +551,70 @@ the app code has not changed.
 
 ## 7. You need to deploy a new version of this application. What would you do?
 
-Since the service runs on Kubernetes and the manifests live in Git, the answer
-is: merge a pull request and let the pipeline do the rest. No one touches the
-cluster directly.
-
-**The flow**
+The answer is: open a pull request and let the pipeline do the rest.
 
 ```
-developer opens PR
-  → GitHub Actions runs tests and vulnerability check
-  → PR is reviewed and merged to main
-
-main branch triggers the CI pipeline (GitHub Actions):
-  → go test ./...
-  → govulncheck ./...
-  → docker build + push to Docker Hub (tagged with the Git SHA)
-  → pipeline updates the image tag in the Kubernetes manifest repo
-
-Argo CD detects the manifest diff
-  → applies the rolling update to the cluster
-  → new pods come up, pass /readyz, old pods are terminated
+PR opened
+  → Stage 1: Lint           (golangci-lint)
+  → Stage 2: Test           (go test -race -cover)
+  → Stage 3: Security scan  (govulncheck + trivy)
+  → PR reviewed and merged to main
+  → Stage 4: Build and push (image tagged with Git SHA, pushed to Docker Hub)
+  → Stage 5: Manifest repo updated with new image tag
+  → Argo CD detects diff, syncs to cluster
+  → Argo Rollouts starts canary: 10% traffic to new pods
+      → analysis: error rate, p99 latency, verdict ratio
+      → passing → 25% → 50% → 100% → promote
+      → failing → automatic rollback
+  → Stage 6: Post-deploy monitoring (Grafana dashboards)
 ```
 
-The workflow is split into two jobs. The `test` job runs on every PR and every
-push to main. The `build-and-push` job only runs on main and is gated on
-`test` passing. The workflow is scoped to code changes only: it does not
-trigger on documentation, README, or any non-code file. Only changes to
-`.go` files, `go.mod`, `go.sum`, or the `Dockerfile` start a run.
+Each tool has a single responsibility and they communicate only through Git:
 
-<details>
-<summary><code>.github/workflows/ci.yml</code></summary>
+| Tool | Responsibility |
+|---|---|
+| GitHub Actions | Lint, test, security scan, build, push image, update manifest tag |
+| Argo CD | Detect manifest diff, sync desired state to the cluster |
+| Argo Rollouts | Manage canary traffic shifting, run analysis, promote or rollback |
 
-```yaml
-name: CI
+**Stage 1: Lint**
 
-on:
-  push:
-    branches: [main]
-    paths:
-      - '**.go'
-      - 'go.mod'
-      - 'go.sum'
-      - 'Dockerfile'
-  pull_request:
-    branches: [main]
-    paths:
-      - '**.go'
-      - 'go.mod'
-      - 'go.sum'
-      - 'Dockerfile'
+`golangci-lint run` catches style issues, dead code, and common Go mistakes. Runs on every PR. A PR that fails lint does not get reviewed.
 
-jobs:
-  test:
-    name: Test
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
+**Stage 2: Test**
 
-      - uses: actions/setup-go@v5
-        with:
-          go-version-file: go.mod
+`go test ./... -race -cover` — `-race` catches data race conditions, `-cover`
+produces a coverage report. A coverage drop on a PR is a signal worth
+reviewing before merging.
 
-      - name: Run tests
-        run: go test ./...
+The test suite covers: health and readiness endpoints, URL lookup verdicts
+(malicious and safe), query string and escaped path preservation, malformed
+path rejection, URL normalization rules (host lowercasing, port, path and
+query case), dataset loading, and the `MemoryStore` and `Service` layers
+independently.
 
-      - name: Run vulnerability check
-        run: |
-          go install golang.org/x/vuln/cmd/govulncheck@latest
-          govulncheck ./...
+**Stage 3: Security scan**
 
-  build-and-push:
-    name: Build and push
-    needs: test
-    runs-on: ubuntu-latest
-    if: github.ref == 'refs/heads/main'
+Two layers:
 
-    steps:
-      - uses: actions/checkout@v4
+- `govulncheck ./...`: checks Go dependencies against the Go vulnerability database.
+- `trivy image`: scans the built container image for OS and dependency CVEs before it reaches the registry.
 
-      - name: Log in to Docker Hub
-        uses: docker/login-action@v3
-        with:
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
+**Stage 4: Build and push**
 
-      - name: Build and push image
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          push: true
-          tags: |
-            maxlef/url-safety-checker:${{ github.sha }}
-            maxlef/url-safety-checker:latest
-```
+On merge to main only. The image is tagged with the Git SHA: `maxlef/url-safety-checker:<sha>`. Never `:latest` in production — it makes rollback unreliable and breaks traceability.
 
-</details>
+**Stage 5: Deploy via Argo CD + Argo Rollouts**
 
-Docker Hub credentials are stored as repository secrets (`DOCKERHUB_USERNAME`
-and `DOCKERHUB_TOKEN`). The image is tagged with the Git SHA so every build
-is traceable to the exact commit, and Argo CD can pin the manifest to a
-specific SHA rather than floating on `:latest`.
+The pipeline updates the image tag in the manifest repository. Argo CD detects the diff and applies it. Because the Deployment is defined as an Argo `Rollout` resource, Argo Rollouts takes over: it starts the canary at 10% traffic and evaluates Prometheus metrics (error rate, p99 latency, verdict ratio) at each step as automated promotion gates. If any threshold is breached, the rollout pauses or rolls back without human intervention.
 
-**Why GitHub Actions and not Jenkins**
+**Stage 6: Post-deploy monitoring**
 
-GitHub Actions runs on GitHub's infrastructure: no server to maintain, no
-plugin updates, no Jenkins downtime. The workflow file lives in `.github/workflows/`
-in the same repository as the code, so the CI configuration is versioned and
-reviewed alongside every change. For a project already on GitHub, Actions is
-the natural choice.
-
-**What to watch during the rollout**
-
-Once Argo CD starts the sync, the signals to monitor are the same ones
-described in Q6: error rate, p99 latency, verdict distribution, and pod
-restarts. Argo CD shows the rollout status in its UI; the underlying
-Kubernetes events are visible via `kubectl rollout status`.
+After the canary reaches 100%, the Grafana dashboards confirm the new version is stable under full traffic. At this point the deploy is considered complete.
 
 **Rollback**
 
-If a signal spikes after the rollout, the fix is a `git revert` on the image
-tag change in the manifest repo. Argo CD picks up the revert and rolls the
-cluster back to the previous image. The bad commit stays in history; nothing
-is force-pushed or lost.
+With Argo Rollouts, a failing canary is rolled back automatically before it reaches full traffic. If a problem is discovered after promotion, a `git revert` on the image tag in the manifest repo is enough: Argo CD picks it up and syncs back to the previous version. The bad commit stays in history; nothing is force-pushed or lost.
 
 ---
 
