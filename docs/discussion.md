@@ -1,8 +1,8 @@
-# Discussion: Part 2
+# Part 2: Discussion and Final Result
 
-This section answers the Part 2 thought exercise. The current implementation is intentionally simple: it runs locally, loads a malware URL list from a local file, keeps it in memory, and responds to HTTP lookup requests.
-
-The goal of the MVP is to be easy to run, test, and understand. The ideas below describe how I would evolve the system if the dataset, traffic, operations, or deployment needs grew.
+The questions below cover how this service would behave and evolve in
+production: scaling the dataset, deploying on AWS or Kubernetes, keeping
+it observable, and shipping changes safely.
 
 ---
 
@@ -560,7 +560,7 @@ attention from the app's.
 The app has few Go dependencies today. Over time, vulnerabilities are
 discovered in dependencies. `govulncheck` and `go mod tidy` should run in CI
 on every pull request. Container base images also need periodic updates; a
-pinned `FROM golang:1.24` will eventually contain unpatched CVEs. The CI
+pinned `FROM golang:1.26` will eventually contain unpatched CVEs. The CI
 pipeline should rebuild and push a new image on a regular schedule even if
 the app code has not changed.
 
@@ -582,7 +582,7 @@ developer opens PR
 main branch triggers the CI pipeline (GitHub Actions):
   → go test ./...
   → govulncheck ./...
-  → docker build + push to ECR (tagged with the Git SHA)
+  → docker build + push to Docker Hub (tagged with the Git SHA)
   → pipeline updates the image tag in the Kubernetes manifest repo
 
 Argo CD detects the manifest diff
@@ -590,12 +590,92 @@ Argo CD detects the manifest diff
   → new pods come up, pass /readyz, old pods are terminated
 ```
 
+The workflow is split into two jobs. The `test` job runs on every PR and every
+push to main. The `build-and-push` job only runs on main and is gated on
+`test` passing. The workflow is scoped to code changes only: it does not
+trigger on documentation, README, or any non-code file. Only changes to
+`.go` files, `go.mod`, `go.sum`, or the `Dockerfile` start a run.
+
+<details>
+<summary><code>.github/workflows/ci.yml</code></summary>
+
+```yaml
+name: CI
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '**.go'
+      - 'go.mod'
+      - 'go.sum'
+      - 'Dockerfile'
+  pull_request:
+    branches: [main]
+    paths:
+      - '**.go'
+      - 'go.mod'
+      - 'go.sum'
+      - 'Dockerfile'
+
+jobs:
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Run tests
+        run: go test ./...
+
+      - name: Run vulnerability check
+        run: |
+          go install golang.org/x/vuln/cmd/govulncheck@latest
+          govulncheck ./...
+
+  build-and-push:
+    name: Build and push
+    needs: test
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main'
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Build and push image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: |
+            maxlef/url-safety-checker:${{ github.sha }}
+            maxlef/url-safety-checker:latest
+```
+
+</details>
+
+Docker Hub credentials are stored as repository secrets (`DOCKERHUB_USERNAME`
+and `DOCKERHUB_TOKEN`). The image is tagged with the Git SHA so every build
+is traceable to the exact commit, and Argo CD can pin the manifest to a
+specific SHA rather than floating on `:latest`.
+
 **Why GitHub Actions and not Jenkins**
 
 GitHub Actions runs on GitHub's infrastructure: no server to maintain, no
-plugin updates, no Jenkins downtime. The workflow file lives in the same
-repository as the code, so the CI configuration is versioned and reviewed
-alongside it. For a project already on GitHub, Actions is the natural choice.
+plugin updates, no Jenkins downtime. The workflow file lives in `.github/workflows/`
+in the same repository as the code, so the CI configuration is versioned and
+reviewed alongside every change. For a project already on GitHub, Actions is
+the natural choice.
 
 **What to watch during the rollout**
 
@@ -610,3 +690,8 @@ If a signal spikes after the rollout, the fix is a `git revert` on the image
 tag change in the manifest repo. Argo CD picks up the revert and rolls the
 cluster back to the previous image. The bad commit stays in history; nothing
 is force-pushed or lost.
+
+---
+
+The published image is available at:
+[hub.docker.com/r/maxlef/url-safety-checker](https://hub.docker.com/r/maxlef/url-safety-checker)

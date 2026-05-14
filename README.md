@@ -18,7 +18,7 @@ Run the service in one terminal, then send lookup requests from another terminal
   - [Troubleshooting](#troubleshooting)
   - [How It Works](#how-it-works)
   - [Design](#design)
-
+  - [Part 2: Discussion and Final Result](#part-2-discussion-and-final-result)
 ## Prerequisites
 
 <details>
@@ -264,3 +264,7 @@ MALWARE_URLS_FILE=data/malware_urls.txt go run ./cmd/urlinfo
 ## Design
 
 See [docs/design.md](docs/design.md) for the service design and architecture notes.
+
+## Part 2: Discussion and Final Result
+
+> The thought exercise answers covering production scaling, observability, deployment, and lifecycle are in [docs/discussion.md](docs/discussion.md).
