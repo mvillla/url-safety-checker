@@ -30,10 +30,10 @@ Run the service in one terminal, then send lookup requests from another terminal
 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
 ```
 
-2. Install Go and Git:
+2. Install Go 1.26 and Git:
 
 ```sh
-brew install go git
+brew install go@1.26 git
 ```
 
 3. Verify:
@@ -50,10 +50,10 @@ git --version
 <details>
 <summary>Linux (Debian/Ubuntu)</summary>
 
-1. Install Go, Git, and curl:
+1. Install Go 1.26, Git, and curl:
 
 ```sh
-sudo snap install go --classic
+sudo snap install go --channel=1.26/stable --classic
 sudo apt update && sudo apt install git curl
 ```
 
