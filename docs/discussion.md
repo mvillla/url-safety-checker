@@ -551,7 +551,7 @@ the app code has not changed.
 
 ## 7. You need to deploy a new version of this application. What would you do?
 
-The answer is: open a pull request and let the pipeline do the rest.
+The answer is: open a pull request and let the [pipeline](https://github.com/mvillla/url-safety-checker/blob/main/.github/workflows/ci.yml) do the rest.
 
 ```
 PR opened
