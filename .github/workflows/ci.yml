@@ -16,6 +16,11 @@ on:
       - 'go.sum'
       - 'Dockerfile'
   workflow_dispatch:
+    inputs:
+      build_image:
+        description: 'Build and push a new Docker image'
+        type: boolean
+        default: true
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
@@ -72,7 +77,7 @@ jobs:
     name: Build and push
     needs: [lint, test, security]
     runs-on: ubuntu-latest
-    if: github.ref == 'refs/heads/main'
+    if: github.ref == 'refs/heads/main' && (github.event_name != 'workflow_dispatch' || inputs.build_image == true)
 
     steps:
       - uses: actions/checkout@v4
