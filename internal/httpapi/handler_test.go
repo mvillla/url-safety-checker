@@ -117,6 +117,29 @@ func TestURLInfoPreservesQueryString(t *testing.T) {
 	}
 }
 
+func TestURLInfoPreservesEscapedPath(t *testing.T) {
+	handler := newTestHandler()
+
+	req := httptest.NewRequest(http.MethodGet, "/urlinfo/1/malware.test/path%2Fencoded", nil)
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected status %d, got %d", http.StatusOK, rec.Code)
+	}
+
+	var got lookup.Result
+	decodeJSON(t, rec, &got)
+
+	if got.NormalizedURL != "malware.test/path%2Fencoded" {
+		t.Fatalf("expected normalized URL %q, got %q", "malware.test/path%2Fencoded", got.NormalizedURL)
+	}
+	if got.Verdict != lookup.VerdictMalicious {
+		t.Fatalf("expected verdict %q, got %q", lookup.VerdictMalicious, got.Verdict)
+	}
+}
+
 func TestURLInfoRejectsMalformedPath(t *testing.T) {
 	handler := newTestHandler()
 
@@ -147,6 +170,7 @@ func newTestHandler() http.Handler {
 	store := lookup.NewMemoryStore([]string{
 		"malware.test/bad",
 		"malware.test/phishing?Token=ABC",
+		"malware.test/path%2Fencoded",
 	})
 	service := lookup.NewService(store)
 	return NewHandler(service).Routes()

@@ -33,7 +33,7 @@ func (h *Handler) urlInfo(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	hostport, path, ok := parseLookupPath(r.URL.Path)
+	hostport, path, ok := parseLookupPath(r.URL.EscapedPath())
 	if !ok {
 		w.WriteHeader(http.StatusBadRequest)
 		return
