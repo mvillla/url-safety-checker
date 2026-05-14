@@ -38,7 +38,6 @@ data/
 
 docs/
   design.md            service design
-  architecture.md      scaling and operational notes
 ```
 
 The application has one executable entrypoint and two internal packages.
@@ -166,13 +165,51 @@ Command:
 go test ./...
 ```
 
-## 11. Scaling Considerations
+## 11. Design Philosophy
 
-The initial store loads a local file into memory. Lookup behavior depends on a
-store interface, so later storage changes do not affect the HTTP contract.
+### 1. Storage is behind an interface
+`Service` calls `store.Contains(url)`. It does not know or care whether `store`
+is an in-memory map, Redis, or a Bloom filter. Any type that implements
+`Contains(url string) bool` is a valid backend.
 
-The architecture notes will cover larger datasets, horizontal scaling, regional
-deployment, update ingestion, operations, lifecycle, and deployment.
+```go
+type Store interface {
+    Contains(url string) bool
+}
+```
+
+Example: adding a Redis backend means writing `RedisStore.Contains`. The HTTP
+layer and `Service` require no changes.
+
+### 2. Layers are injected, not imported
+Each layer receives its dependency at construction time instead of
+instantiating it internally. This keeps each layer testable in isolation and
+lets production swap any backend without touching unrelated code.
+
+`NewService(store Store)` and `NewHandler(svc *Service)` accept any
+conforming type. Tests pass a stub; production passes the real implementation.
+
+### 3. API versioning is in the route
+The version number is part of the URL path from day one, so a breaking change
+ships as a new path without forcing existing callers to update.
+
+`/urlinfo/1/...` stays live while `/urlinfo/2/...` is rolled out. Callers
+migrate on their own schedule.
+
+### 4. Operational endpoints are not an afterthought
+`/healthz` and `/readyz` exist before any business logic, making the service
+deployable to any orchestrator from the first commit.
+
+In Kubernetes: liveness probe hits `/healthz`, readiness probe hits `/readyz`.
+A new instance only receives traffic after `/readyz` returns `200`, which means
+rolling updates and canary releases are safe with zero extra configuration.
+
+### 5. Packages have one job
+`lookup` owns URL normalization and storage. `httpapi` owns HTTP routing and
+request parsing. Neither package imports the other.
+
+A change to normalization rules, the storage backend, or the HTTP response
+format touches exactly one package.
 
 ## 12. Delivery Plan
 
@@ -183,4 +220,3 @@ deployment, update ingestion, operations, lifecycle, and deployment.
 5. Add HTTP handlers and handler tests.
 6. Add application startup and configuration.
 7. Add run, test, and build instructions.
-8. Add architecture notes for operations and deployment.

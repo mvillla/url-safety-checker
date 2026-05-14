@@ -254,11 +254,11 @@ MALWARE_URLS_FILE=data/malware_urls.txt go run ./cmd/urlinfo
 
 ![URL lookup service request flow](docs/assets/url-lookup-flow.svg)
 
-1. **HTTP Proxy** intercepts a request and sends a blocking lookup to the service — it waits for a verdict before allowing or denying traffic.
+1. **HTTP Proxy** intercepts a request and sends a blocking lookup to the service and waits for a verdict before allowing or denying traffic.
 2. **Lookup API** validates the HTTP method and parses the route (`GET /urlinfo/1/...`).
 3. **URL Normalization** lowercases the host and preserves port, path, and query string to produce a scheme-less lookup key.
-4. **Verdict Engine** does an exact-match check against the in-memory malware URL set and returns `"safe"` or `"malicious"` — always HTTP 200.
-5. The **Local Dataset File** (`data/malware_urls.txt`) is read at startup and loaded into the **Malware URL Set** as an in-memory map — no database needed.
+4. **Verdict Engine** does an exact-match check against the in-memory malware URL set and returns `"safe"` or `"malicious"`, always as HTTP 200.
+5. The **Local Dataset File** (`data/malware_urls.txt`) is read at startup and loaded into the **Malware URL Set** as an in-memory map. No database needed.
 6. The **JSON verdict** travels back to the proxy, which uses it to allow or block the request.
 
 ## Design
